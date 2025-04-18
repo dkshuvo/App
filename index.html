@@ -1,0 +1,220 @@
+<!DOCTYPE html><html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DK DXF View</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/dxf-parser/dist/dxf-parser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom/dist/svg-pan-zoom.min.js"></script>
+  <style>
+    /* আগের CSS অপরিবর্তিত রাখা হয়েছে */
+    body { margin: 0; padding: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; }
+    header { text-align: center; padding: 1em; font-size: 1.5em; }
+    header i { margin-right: 0.5em; color: #0ff; }
+    .upload-container { display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 1em; }
+    .upload-label { padding: 1em 2em; background: #111; border: 2px dashed #0ff; border-radius: 0.5em; cursor: pointer; color: #0ff; margin-bottom: 1em; }
+    .upload-label:hover { background: #222; }
+    #fileInput { display: none; }
+    #gallery { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; padding: 10px; }
+    .thumb { flex: 0 0 calc(50% - 20px); max-width: 300px; background: #111; border: 3px solid #0ff; border-radius: 1em; box-shadow: 0 0 15px #0ff; position: relative; overflow: hidden; height: 300px; }
+    .thumb svg { width: 100%; height: 100%; display: block; }
+    .actions { position: absolute; bottom: 5px; left: 5px; right: 5px; display: flex; gap: 10px; justify-content: center; }
+    .actions button { font-size: 1.1em; padding: 0.5em 1em; border: none; border-radius: 4px; background: #0ff; color: #000; cursor: pointer; transition: transform 0.2s; }
+    .actions button:active { transform: scale(0.95); }
+    #viewerOverlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, .95); display: none; align-items: center; justify-content: center; flex-direction: column; padding: 1em; box-sizing: border-box; }
+    .zoom-container { width: 95vw; max-width: 900px; height: 80vh; background: #000; position: relative; margin-bottom: 1em; }
+    .zoom-container svg { width: 100%; height: 100%; }
+    #viewerButtons { display: flex; gap: 15px; flex-wrap: wrap; margin-top: 1em; }
+    #viewerButtons button { font-size: 1.3em; padding: 0.7em 1.2em; border: none; border-radius: 4px; background: #0ff; color: #000; cursor: pointer; transition: transform 0.2s; }
+    #viewerButtons button:active { transform: scale(0.95); }
+  </style>
+</head>
+<body>
+  <header><i class="fa-solid fa-drafting-compass"></i>DK DXF View</header>
+  <div class="upload-container">
+    <label for="fileInput" class="upload-label">ডিএক্সএফ ফাইল আপলোড করুন</label>
+    <input type="file" id="fileInput" accept=".dxf">
+  </div>
+  <div id="gallery"></div>
+  <div id="viewerOverlay">
+    <div class="zoom-container">
+      <svg id="largeCanvas" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div id="viewerButtons">
+      <button id="resetViewBtn"><i class="fa-solid fa-eye"></i></button>
+      <button id="downloadBtn"><i class="fa-solid fa-download"></i></button>
+      <button id="closeBtn"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+  <script>
+    const DB_NAME = "DXF_DB";
+    const STORE_NAME = "files";
+    let db;const openDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onerror = () => reject("DB ওপেন করা গেল না!");
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "name" });
+      }
+    };
+  });
+};
+
+const saveFile = (name, content) => {
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  const store = tx.objectStore(STORE_NAME);
+  store.put({ name, content });
+};
+
+const getAllFiles = () => {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject("তথ্য আনা গেল না!");
+  });
+};
+
+(async () => {
+  db = await openDB();
+  const files = await getAllFiles();
+  files.forEach(f => addThumb(f.name, f.content));
+})();
+
+const fileInput = document.getElementById('fileInput');
+const gallery = document.getElementById('gallery');
+const overlay = document.getElementById('viewerOverlay');
+const largeCanvas = document.getElementById('largeCanvas');
+const resetViewBtn = document.getElementById('resetViewBtn');
+const closeBtn = document.getElementById('closeBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+let panZoomInstance = null, currentContent = '', currentName = '';
+
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const content = reader.result;
+    addThumb(file.name, content);
+    saveFile(file.name, content);
+  };
+  reader.readAsText(file);
+});
+
+function addThumb(name, content) {
+  const parser = new DxfParser();
+  const dxf = parser.parseSync(content);
+  const container = document.createElement('div');
+  container.className = 'thumb';
+  const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  drawDXF(dxf, svgEl);
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const openBtn = document.createElement('button');
+  openBtn.textContent = 'Open';
+  openBtn.onclick = () => showOverlay(content, name);
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.onclick = () => {
+    if (confirm('তুই কি সত্যিই ডিলিট করতে চাস? ভাবিস ভালো করে!')) {
+      container.remove();
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).delete(name);
+    }
+  };
+  actions.appendChild(openBtn);
+  actions.appendChild(delBtn);
+  container.appendChild(svgEl);
+  container.appendChild(actions);
+  gallery.prepend(container);
+}
+
+function drawDXF(dxf, svg) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  svg.innerHTML = '';
+  dxf.entities.forEach(e => {
+    let elem;
+    if (e.type === 'LINE' || e.vertices) {
+      elem = document.createElementNS(svg.namespaceURI, 'polyline');
+      const pts = (e.vertices || []).map(v => {
+        minX = Math.min(minX, v.x);
+        minY = Math.min(minY, -v.y);
+        maxX = Math.max(maxX, v.x);
+        maxY = Math.max(maxY, -v.y);
+        return `${v.x},${-v.y}`;
+      }).join(' ');
+      elem.setAttribute('points', pts);
+      elem.setAttribute('fill', 'none');
+    } else if (e.type === 'CIRCLE') {
+      elem = document.createElementNS(svg.namespaceURI, 'circle');
+      elem.setAttribute('cx', e.center.x);
+      elem.setAttribute('cy', -e.center.y);
+      elem.setAttribute('r', e.radius);
+      minX = Math.min(minX, e.center.x - e.radius);
+      minY = Math.min(minY, -e.center.y - e.radius);
+      maxX = Math.max(maxX, e.center.x + e.radius);
+      maxY = Math.max(maxY, -e.center.y + e.radius);
+    }
+    if (elem) {
+      elem.setAttribute('stroke', '#0ff');
+      elem.setAttribute('stroke-width', '0.5');
+      elem.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(elem);
+    }
+  });
+  svg.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+}
+
+function showOverlay(content, name) {
+  currentContent = content;
+  currentName = name;
+  const dxf = new DxfParser().parseSync(content);
+  drawDXF(dxf, largeCanvas);
+  overlay.style.display = 'flex';
+  if (panZoomInstance) panZoomInstance.destroy();
+  panZoomInstance = svgPanZoom(largeCanvas, {
+    zoomEnabled: true,
+    panEnabled: true,
+    fit: true,
+    center: true,
+    minZoom: 0.3,
+    maxZoom: 20,
+    zoomScaleSensitivity: 0.2
+  });
+}
+
+resetViewBtn.onclick = () => {
+  if (panZoomInstance) {
+    panZoomInstance.resetZoom();
+    panZoomInstance.center();
+    panZoomInstance.fit();
+  }
+};
+
+closeBtn.onclick = () => {
+  overlay.style.display = 'none';
+  if (panZoomInstance) panZoomInstance.destroy();
+};
+
+downloadBtn.onclick = () => {
+  const filename = prompt("ফাইলের নাম দিন:", currentName);
+  if (!filename) return;
+  const blob = new Blob([currentContent], { type: 'application/dxf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+  </script>
+</body>
+</html>
